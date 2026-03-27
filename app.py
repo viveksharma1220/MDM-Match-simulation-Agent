@@ -91,14 +91,14 @@ if st.session_state['current_step'] == "01 Data Ingestion":
             st.session_state['current_step'] = "02 Data Profiling"
             st.rerun()
 
-# --- STEP 2: DATA PROFILING (WITH AI STRATEGY) ---
+# --- STEP 2: DATA PROFILING ---
 elif st.session_state['current_step'] == "02 Data Profiling":
     st.header("📊 Deep Data Profiler")
     p_df, samples = profile_data(st.session_state['master_data'])
     
     st.markdown('<div class="ai-box">', unsafe_allow_html=True)
     if st.session_state['ai_profile_analysis'] is None:
-        st.info("The AI hasn't analyzed your data yet. Click below for an MDM Strategy Recommendation.")
+        st.info("The AI hasn't analyzed your data yet.")
         if st.button("🧠 Induce MDM Strategy with Groq"):
             with st.spinner("Analyzing data patterns..."):
                 st.session_state['ai_profile_analysis'] = get_ai_reasoning(p_df)
@@ -112,10 +112,6 @@ elif st.session_state['current_step'] == "02 Data Profiling":
             return f'background-color: {color}; color: white; font-weight: bold; border-radius: 5px;'
 
         st.dataframe(ai_rec_df.style.applymap(highlight_match, subset=['match_type']), use_container_width=True)
-        
-        if st.button("Re-Run AI Analysis 🔄"):
-            st.session_state['ai_profile_analysis'] = None
-            st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.subheader("📋 Statistical Inventory")
@@ -142,7 +138,7 @@ elif st.session_state['current_step'] == "03 Quality & Enrichment":
             st.session_state['current_step'] = "04 Match Rule Creator"
             st.rerun()
 
-# --- STEP 4: RULE CREATOR (HUMAN-IN-THE-LOOP WORKBENCH) ---
+# --- STEP 4: RULE CREATOR ---
 elif st.session_state['current_step'] == "04 Match Rule Creator":
     st.header("🧬 AI Match Rule Designer")
     
@@ -151,56 +147,88 @@ elif st.session_state['current_step'] == "04 Match Rule Creator":
             st.session_state['discovered_rules'] = discover_match_rules(st.session_state['master_data'])
 
     rules = st.session_state.get('discovered_rules')
+    print("RULE",rules)
     if rules is not None and not rules.empty:
         st.subheader("🛠️ Architectural Review Board")
-        st.info("The Agent has proposed the following rules. You can edit the logic directly below.")
+        st.info("Check the box next to the rules you want to include in the simulation.")
         
         edited_list = []
         for i, row in rules.iterrows():
             with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
+                c_check, c1, c2 = st.columns([0.5, 3, 1], vertical_alignment="center")
+                
+                with c_check:
+                    # User-selected Checkmark
+                    is_selected = st.checkbox("✅ Use", value=row.get('selected', True), key=f"chk_{i}")
+                
                 with c1:
-                    name = st.text_input(f"Rule Name {i}", value=row['rule_name'], key=f"n_{i}")
-                    # HUMAN LOOP: The logic text area is now fully editable
-                    logic = st.text_area(f"Logic {i}", value=row['logic'], key=f"l_{i}")
+                    # Rule Name is stored but hidden as per previous request
+                    name = row.get('rule_name', f"Rule {i}") 
+                    # Logic text area
+                    logic = st.text_area(f"Logic {i}", value=row['logic'], key=f"l_{i}", height=68, label_visibility="collapsed")
+                
                 with c2:
                     conf = st.slider(f"Confidence {i}", 0.0, 1.0, float(row['confidence']), key=f"c_{i}")
                     cat = "🔵 AUTO" if conf >= 0.90 else "🟡 POTENTIAL"
                     st.markdown(f"**Strategy:** {cat}")
                 
                 edited_list.append({
+                    "selected": is_selected,
                     "rule_name": name, 
                     "logic": logic, 
                     "confidence": conf, 
+                    "evidence_score_summary": row.get('evidence_score_summary', ''),
                     "rule_reasoning": row.get('rule_reasoning', '')
                 })
         
-        if st.button("💾 Save Rules & Run Simulation", type="primary"):
+        if st.button("💾 Save Selected Rules & Run Simulation", type="primary"):
             st.session_state['discovered_rules'] = pd.DataFrame(edited_list)
             st.session_state['current_step'] = "05 Data Simulation"
             st.rerun()
 
 # --- STEP 5: SIMULATION ---
+# --- STEP 5: SIMULATION ---
 elif st.session_state['current_step'] == "05 Data Simulation":
     st.header("🧪 MDM Impact Simulation")
     
-    if st.button("🚀 Execute Final Simulation", type="primary"):
-        with st.spinner("Processing data merges..."):
-            report, auto_tot, pot_tot = parse_and_simulate(
-                st.session_state['master_data'], 
-                st.session_state['discovered_rules']
-            )
-            st.session_state['sim_results'] = report
-            st.session_state['auto_tot'] = auto_tot
-            st.session_state['pot_tot'] = pot_tot
-
-    if 'sim_results' in st.session_state:
-        colA, colB = st.columns(2)
-        colA.metric("Auto-Merged Records", st.session_state['auto_tot'], help="Logic Confidence >= 90%")
-        colB.metric("Potential Matches", st.session_state['pot_tot'], help="Logic Confidence < 90%")
+    # Filter the rules based on the user's checkmarks
+    all_rules = st.session_state.get('discovered_rules', pd.DataFrame())
+    active_rules = all_rules[all_rules['selected'] == True] if not all_rules.empty else pd.DataFrame()
+    
+    if active_rules.empty:
+        st.warning("⚠️ No rules selected. Go back to Step 04 and check the 'Use' box on at least one rule.")
+        if st.button("⬅️ Back to Rule Creator"):
+            st.session_state['current_step'] = "04 Match Rule Creator"
+            st.rerun()
+    else:
+        st.info(f"Ready to apply **{len(active_rules)}** rules to your ingested dataset.")
         
-        for res in st.session_state['sim_results']:
-            label = "✅ [AUTO]" if "Automatic" in res['category'] else "⚠️ [POTENTIAL]"
-            with st.expander(f"{label} {res['rule']} - {res['count']} Records Affected"):
-                st.markdown(f"**Applied Logic:** `{res['logic']}`")
-                st.dataframe(res['data'], use_container_width=True)
+        if st.button("🚀 Execute Final Simulation", type="primary"):
+            with st.spinner("Scanning data for matching records..."):
+                # Run the simulation
+                report, auto_tot, pot_tot = parse_and_simulate(
+                    st.session_state['master_data'], 
+                    active_rules
+                )
+                # Store results in session
+                st.session_state['sim_results'] = report
+                st.session_state['auto_tot'] = auto_tot
+                st.session_state['pot_tot'] = pot_tot
+
+        # --- DISPLAY RESULTS ---
+        if 'sim_results' in st.session_state:
+            res_list = st.session_state['sim_results']
+            
+            if not res_list:
+                st.error("❌ Simulation finished: Found 0 matches. No two rows have identical values in the columns you selected.")
+            else:
+                colA, colB = st.columns(2)
+                colA.metric("Auto-Merged Records", st.session_state['auto_tot'])
+                colB.metric("Potential Matches", st.session_state['pot_tot'])
+                
+                for res in res_list:
+                    icon = "✅" if "Automatic" in res['category'] else "⚠️"
+                    with st.expander(f"{icon} {res['rule']} - {res['count']} Records Found"):
+                        st.write(f"**Applied Logic:** `{res['logic']}`")
+                        # This shows the actual records that have the same npi_id (or other column)
+                        st.dataframe(res['data'], use_container_width=True)
