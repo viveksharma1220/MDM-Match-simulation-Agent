@@ -34,7 +34,7 @@ if 'ai_profile_analysis' not in st.session_state:
 # --- 3. Sidebar Navigation ---
 with st.sidebar:
     st.title("🛡️ MDM Workflow")
-    steps = ["01 Data Ingestion", "02 Data Profiling", "03 Quality & Enrichment", "04 Match Rule Creator", "05 Data Simulation"]
+    steps = ["01 Data Ingestion", "02 Data Profiling", "03 Quality & Enrichment", "04 Match Rule Creator", "05 Data Simulation","06 Rule Export"]
     curr_idx = steps.index(st.session_state['current_step'])
     
     for i, s in enumerate(steps):
@@ -99,7 +99,7 @@ elif st.session_state['current_step'] == "02 Data Profiling":
     st.markdown('<div class="ai-box">', unsafe_allow_html=True)
     if st.session_state['ai_profile_analysis'] is None:
         st.info("The AI hasn't analyzed your data yet.")
-        if st.button("🧠 Induce MDM Strategy with Groq"):
+        if st.button("🧠 Induce MDM Strategy with AI"):
             with st.spinner("Analyzing data patterns..."):
                 st.session_state['ai_profile_analysis'] = get_ai_reasoning(p_df)
                 st.rerun()
@@ -147,7 +147,6 @@ elif st.session_state['current_step'] == "04 Match Rule Creator":
             st.session_state['discovered_rules'] = discover_match_rules(st.session_state['master_data'])
 
     rules = st.session_state.get('discovered_rules')
-    print("RULE",rules)
     if rules is not None and not rules.empty:
         st.subheader("🛠️ Architectural Review Board")
         st.info("Check the box next to the rules you want to include in the simulation.")
@@ -232,3 +231,38 @@ elif st.session_state['current_step'] == "05 Data Simulation":
                         st.write(f"**Applied Logic:** `{res['logic']}`")
                         # This shows the actual records that have the same npi_id (or other column)
                         st.dataframe(res['data'], use_container_width=True)
+
+elif st.session_state['current_step'] == "06 Rule Export":
+    st.header("📤 Multi Platform Rule Export")
+
+    #retrieve the rules from step 04 - Match Rule Creator
+    all_rules = st.session_state.get("discovered_rules", pd.DataFrame())
+    #select only the checked rules
+    checked_rules = all_rules[all_rules['selected'] == True] if not all_rules.empty else pd.DataFrame()
+    if checked_rules.empty:
+        st.warning("No rules were selected for the export. Please go to the step 04 and check the 'use' box")
+        if st.button("⬅️ Back to Rule Creator"):
+            st.session_state['current_step'] = '04 Match Rule Creator'
+            st.rerun()
+    else:
+        st.success(f"✅ Ready to export **{len(checked_rules)}** selected match rules.")
+        #Choose the exported format 
+        tab1,tab2,tab3 = st.tabs(["Reltio(JSON)" , "Semarchy(YAML)", "Informatics(XML)"])
+
+        with tab1:
+            st.header("Reltio MatchGroups JSON")
+            reltio_payload = {"matchGroups":[]}
+
+            #iterate over the rows of dataframe
+            for i,row in checked_rules.iterrows():
+                clean_rule = row['rule_name'].replace(" ","")
+                reltio_payload["matchGroups"].append({
+                    "uri":"configuration/entityTypes/<EntityType>/matchGroups/{clean_rule}",
+                    "label":row['rule_name'],
+                    "type":"automatic"  if row['confidence'] >= 0.90 else "suspect",
+                    "useOvOnly": "true",
+                    "rule":{
+                        
+                    }
+                })
+
