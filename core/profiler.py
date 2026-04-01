@@ -88,8 +88,8 @@ def profile_data(df):
         
     return pd.DataFrame(stats), samples # Returning samples for AI reasoning
 
-def get_ai_reasoning(profile_df):
-    """Uses Groq to recommend MDM strategies based on deep profile."""
+def get_ai_reasoning(profile_df, sample_csv):
+    """Uses Groq to recommend MDM strategies based on deep profile AND sample data."""
     api_key = st.secrets.get("groq", {}).get("profiler_api_key")
     if not api_key:
         return [{"column": "Error", "reasoning": "API Key Missing"}]
@@ -108,6 +108,7 @@ def get_ai_reasoning(profile_df):
             "avg_len": row['Avg Len']
         })
 
+    # Inject sample_csv into the prompt for better reasoning
     prompt = f"""
     Act as an MDM (Master Data Management) Architect. 
     Analyze these dataset columns and recommend a matching strategy.
@@ -117,10 +118,13 @@ def get_ai_reasoning(profile_df):
     - 'Fuzzy': Use for names, addresses, or city fields where typos occur.
     - 'None': Use for descriptions, timestamps, or low-uniqueness noise.
 
-    Data Profile:
+    Data Profile (Statistical Metadata):
     {json.dumps(analysis_payload, indent=2)}
+    
+    Actual Data Sample (First 10 rows for context):
+    {sample_csv}
 
-    Return a JSON array of objects:
+    Return a JSON array of objects with these exact keys:
     {{"column": "...", "match_type": "Exact|Fuzzy|None", "confidence": "High|Med|Low", "reasoning": "..."}}
     """
 
@@ -136,7 +140,7 @@ def get_ai_reasoning(profile_df):
         )
         
         res = json.loads(completion.choices[0].message.content)
-        # Flatten if Groq wraps in a key
+        # Flatten if Groq wraps in a key (like {"strategies": [...]})
         return res if isinstance(res, list) else list(res.values())[0]
 
     except Exception as e:
