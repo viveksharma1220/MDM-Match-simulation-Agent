@@ -34,7 +34,7 @@ if 'ai_profile_analysis' not in st.session_state:
 # --- 3. Sidebar Navigation ---
 with st.sidebar:
     st.title("🛡️ MDM Workflow")
-    steps = ["01 Data Ingestion", "02 Data Profiling", "03 Quality & Enrichment", "04 Match Rule Creator", "05 Data Simulation","06 Rule Export"]
+    steps = ["01 Data Ingestion", "02 Data Profiling", "03 Quality & Enrichment", "04 Match Rule Creator", "05 Data Simulation"]
     curr_idx = steps.index(st.session_state['current_step'])
     
     for i, s in enumerate(steps):
@@ -94,14 +94,28 @@ if st.session_state['current_step'] == "01 Data Ingestion":
 # --- STEP 2: DATA PROFILING ---
 elif st.session_state['current_step'] == "02 Data Profiling":
     st.header("📊 Deep Data Profiler")
-    p_df, samples = profile_data(st.session_state['master_data'])
+    
+    # Control attributes sent to Groq
+    all_columns = st.session_state['master_data'].columns.tolist()
+    st.subheader("⚙️ Configure AI Profiling")
+    selected_profile_cols = st.multiselect(
+        "Select Attributes for AI Profiling (Fuzzy vs Exact analysis):", 
+        all_columns, 
+        default=all_columns[:min(5, len(all_columns))] # Default to first 5
+    )
+    
+    # Filter the dataframe based on selection for profiling
+    filtered_df = st.session_state['master_data'][selected_profile_cols]
+    p_df, samples = profile_data(filtered_df)
     
     st.markdown('<div class="ai-box">', unsafe_allow_html=True)
     if st.session_state['ai_profile_analysis'] is None:
         st.info("The AI hasn't analyzed your data yet.")
-        if st.button("🧠 Induce MDM Strategy with AI"):
-            with st.spinner("Analyzing data patterns..."):
-                st.session_state['ai_profile_analysis'] = get_ai_reasoning(p_df)
+        if st.button("🧠 Induce MDM Strategy with Groq"):
+            with st.spinner("Analyzing data patterns and sample data..."):
+                # REQUIREMENT 1: Send sample data alongside attributes
+                sample_csv = filtered_df.head(10).to_csv(index=False) 
+                st.session_state['ai_profile_analysis'] = get_ai_reasoning(p_df, sample_csv)
                 st.rerun()
     else:
         st.subheader("✨ AI Architectural Recommendations")
@@ -111,7 +125,10 @@ elif st.session_state['current_step'] == "02 Data Profiling":
             color = '#1f6e2e' if val == 'Exact' else '#b58900' if val == 'Fuzzy' else '#444'
             return f'background-color: {color}; color: white; font-weight: bold; border-radius: 5px;'
 
-        st.dataframe(ai_rec_df.style.applymap(highlight_match, subset=['match_type']), use_container_width=True)
+        if 'match_type' in ai_rec_df.columns:
+            st.dataframe(ai_rec_df.style.applymap(highlight_match, subset=['match_type']), use_container_width=True)
+        else:
+            st.dataframe(ai_rec_df, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.subheader("📋 Statistical Inventory")
@@ -142,11 +159,21 @@ elif st.session_state['current_step'] == "03 Quality & Enrichment":
 elif st.session_state['current_step'] == "04 Match Rule Creator":
     st.header("🧬 AI Match Rule Designer")
     
+    # Multiselect to control attributes sent to Groq
+    all_columns = st.session_state['master_data'].columns.tolist()
+    selected_match_cols = st.multiselect(
+        "Select Attributes to participate in Match Rule Generation:", 
+        all_columns, 
+        default=all_columns[:min(5, len(all_columns))]
+    )
+    
     if st.button("🔍 Induce AI Rule Proposals", type="primary"):
-        with st.spinner("AI Architect is designing rules based on vector clusters..."):
-            st.session_state['discovered_rules'] = discover_match_rules(st.session_state['master_data'])
+        with st.spinner("AI Architect is designing Reltio-compliant rules..."):
+            # Pass ONLY the selected columns to the matcher
+            st.session_state['discovered_rules'] = discover_match_rules(st.session_state['master_data'], selected_match_cols)
 
     rules = st.session_state.get('discovered_rules')
+    
     if rules is not None and not rules.empty:
         st.subheader("🛠️ Architectural Review Board")
         st.info("Check the box next to the rules you want to include in the simulation.")
@@ -157,14 +184,12 @@ elif st.session_state['current_step'] == "04 Match Rule Creator":
                 c_check, c1, c2 = st.columns([0.5, 3, 1], vertical_alignment="center")
                 
                 with c_check:
-                    # User-selected Checkmark
                     is_selected = st.checkbox("✅ Use", value=row.get('selected', True), key=f"chk_{i}")
                 
                 with c1:
-                    # Rule Name is stored but hidden as per previous request
                     name = row.get('rule_name', f"Rule {i}") 
-                    # Logic text area
-                    logic = st.text_area(f"Logic {i}", value=row['logic'], key=f"l_{i}", height=68, label_visibility="collapsed")
+                    # Display the Reltio JSON logic (made the text area taller to fit JSON)
+                    logic = st.text_area(f"Logic {i}", value=row['logic'], key=f"l_{i}", height=200, label_visibility="collapsed")
                 
                 with c2:
                     conf = st.slider(f"Confidence {i}", 0.0, 1.0, float(row['confidence']), key=f"c_{i}")
@@ -185,7 +210,6 @@ elif st.session_state['current_step'] == "04 Match Rule Creator":
             st.session_state['current_step'] = "05 Data Simulation"
             st.rerun()
 
-# --- STEP 5: SIMULATION ---
 # --- STEP 5: SIMULATION ---
 elif st.session_state['current_step'] == "05 Data Simulation":
     st.header("🧪 MDM Impact Simulation")
@@ -231,38 +255,3 @@ elif st.session_state['current_step'] == "05 Data Simulation":
                         st.write(f"**Applied Logic:** `{res['logic']}`")
                         # This shows the actual records that have the same npi_id (or other column)
                         st.dataframe(res['data'], use_container_width=True)
-
-elif st.session_state['current_step'] == "06 Rule Export":
-    st.header("📤 Multi Platform Rule Export")
-
-    #retrieve the rules from step 04 - Match Rule Creator
-    all_rules = st.session_state.get("discovered_rules", pd.DataFrame())
-    #select only the checked rules
-    checked_rules = all_rules[all_rules['selected'] == True] if not all_rules.empty else pd.DataFrame()
-    if checked_rules.empty:
-        st.warning("No rules were selected for the export. Please go to the step 04 and check the 'use' box")
-        if st.button("⬅️ Back to Rule Creator"):
-            st.session_state['current_step'] = '04 Match Rule Creator'
-            st.rerun()
-    else:
-        st.success(f"✅ Ready to export **{len(checked_rules)}** selected match rules.")
-        #Choose the exported format 
-        tab1,tab2,tab3 = st.tabs(["Reltio(JSON)" , "Semarchy(YAML)", "Informatics(XML)"])
-
-        with tab1:
-            st.header("Reltio MatchGroups JSON")
-            reltio_payload = {"matchGroups":[]}
-
-            #iterate over the rows of dataframe
-            for i,row in checked_rules.iterrows():
-                clean_rule = row['rule_name'].replace(" ","")
-                reltio_payload["matchGroups"].append({
-                    "uri":"configuration/entityTypes/<EntityType>/matchGroups/{clean_rule}",
-                    "label":row['rule_name'],
-                    "type":"automatic"  if row['confidence'] >= 0.90 else "suspect",
-                    "useOvOnly": "true",
-                    "rule":{
-                        
-                    }
-                })
-

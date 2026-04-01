@@ -116,52 +116,66 @@ def find_semantic_clusters(df, threshold=0.80):
     return sorted(pairs, key=lambda x: x['max_score'], reverse=True)[:5]
 
 # --- SECTION 4: THE RULE INDUCTOR ---
-def discover_match_rules(df, threshold=0.80):
-    if df is None or df.empty: return pd.DataFrame()
+def discover_match_rules(df, selected_columns):
+    """Generates Reltio-formatted match rules using Groq based on selected columns."""
+    # Note: Ensure "matcher_api_key" or "profiler_api_key" matches what is in your secrets.toml
+    api_key = st.secrets.get("groq", {}).get("matcher_api_key") 
+    if not api_key:
+        return pd.DataFrame([{"rule_name": "Error", "logic": "API Key Missing", "confidence": 0.0, "selected": False}])
 
-    evidence = find_semantic_clusters(df, threshold)
-    if not evidence:
-        return pd.DataFrame([{"rule_name": "No Duplicates Found", "logic": "No similarity detected", "confidence": 0}])
+    client = Groq(api_key=api_key)
 
-    groq_key = st.secrets.get("groq", {}).get("matcher_api_key")
-    client = Groq(api_key=groq_key)
+    # Filter dataframe to ONLY include user-selected columns
+    filtered_df = df[selected_columns]
 
+    # Get sample data as CSV string to send to Groq
+    sample_data = filtered_df.head(10).to_csv(index=False)
+
+    # Strict prompt to force Reltio JSON Output
     prompt = f"""
-    Act as a Senior MDM Architect. Review the following field-level similarity clusters.
-    CRITICAL BUSINESS RULES:
-    - 'npi_id', 'ssn', and 'email' are UNIQUE identifiers. 
-    - NEVER use 'Fuzzy' for these IDs. If the similarity score is high (e.g. > 0.9), always use 'Exact()'.
-    - Use 'Fuzzy' only for Names, Addresses, and Cities.
-    EVIDENCE:
-    {json.dumps(evidence, indent=2)}
+    You are an MDM Reltio Match Rule Configuration Expert.
+    Analyze the following data sample and generate match rules strictly formatted as Reltio Match Rule JSON objects.
 
-    TASK:
-    Generate Match Rules in JSON.
-    1. 'evidence_score_summary': Brief score breakdown (e.g. Email: 1.0, Name: 0.9).
-    2. 'logic': MDM syntax (e.g. Exact(Email) OR Fuzzy(Name)).
-    3. Use 'Automatic' for high-confidence matches.
+    DATA SAMPLE:
+    {sample_data}
 
-    OUTPUT FORMAT (Strict JSON Array):
-    [{{
-      [{{
-        "rule_name": "Short Name",
-        "type": "Automatic | Suspect",
-        "logic": "Exact(column_name)",
-        "confidence": 0.95
-    }}]
-    }}]
+    REQUIREMENTS:
+    1. Create 2 to 3 distinct Reltio match rules based ONLY on the columns provided in the sample. Do not invent columns.
+    2. Output a JSON object containing an array called "rules".
+    3. Each object in the "rules" array must have these exact keys:
+       - "rule_name": String (e.g., "Exact Name and Fuzzy Address")
+       - "confidence": Float between 0.0 and 1.0 (e.g., 0.95)
+       - "logic": A stringified JSON representing the actual Reltio match rule config.
+       - "rule_reasoning": String explaining why this rule is appropriate for this data.
+
+    CRITICAL RELTIO STRUCTURE: 
+    The "logic" field MUST contain a stringified JSON. Inside the "rule" object of this JSON, you MUST include "matchTokenClasses" and "comparatorClasses" that map the chosen attributes to standard Reltio Java classes (e.g., com.reltio.match.comparator.BasicStringComparator, com.reltio.match.token.ExactMatchToken, com.reltio.match.comparator.DoubleMetaphoneComparator, etc.).
+
+    Example of the exact string format expected inside the "logic" field:
+    '{{"matchGroups": [{{"uri": "configuration/entityTypes/Contact/matchGroups/Rule1", "label": "Rule 1", "type": "suspect", "rule": {{"matchTokenClasses": {{"mapping": [{{"attribute": "configuration/entityTypes/Contact/attributes/FirstName", "class": "com.reltio.match.token.FuzzyTextMatchToken"}}]}}, "comparatorClasses": {{"mapping": [{{"attribute": "configuration/entityTypes/Contact/attributes/FirstName", "class": "com.reltio.match.comparator.DoubleMetaphoneComparator"}}]}}, "fuzzy": ["configuration/entityTypes/Contact/attributes/FirstName"]}}}}]}}'
+
+    RETURN ONLY VALID JSON.
     """
 
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "Output only JSON arrays."}, {"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": "You are a Data Architect. Respond ONLY with valid JSON containing a 'rules' array."},
+                {"role": "user", "content": prompt}
+            ],
             response_format={"type": "json_object"},
             temperature=0.1
         )
-        content = _clean_json_text(completion.choices[0].message.content)
-        data = json.loads(content)
-        rules = data if isinstance(data, list) else list(data.values())[0]
-        return pd.DataFrame(rules)
+
+        res = json.loads(completion.choices[0].message.content)
+        rules_list = res.get("rules", [])
+        
+        # Add default 'selected' boolean for the Streamlit UI
+        for r in rules_list:
+            r['selected'] = True
+            
+        return pd.DataFrame(rules_list)
+
     except Exception as e:
-        return pd.DataFrame([{"rule_name": "Error", "logic": str(e), "confidence": 0}])
+        return pd.DataFrame([{"rule_name": "Error", "logic": str(e), "confidence": 0.0, "selected": False}])
